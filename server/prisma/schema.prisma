@@ -7,11 +7,90 @@ datasource db {
   provider = "postgresql"
 }
 
+// 1. User Table (Investors & Creators)
 model User {
-  id        Int      @id @default(autoincrement())
-  username  String
-  email     String   @unique
-  password  String
+  id            String      @id @default(uuid())
+  email         String      @unique
+  username      String      @unique
+  password      String   
+  salt          String   
+  role          UserRole    @default(INVESTOR)
+  
+  // NEW: The user's available cash to buy stocks, or cash earned from selling
+  walletBalance Float       @default(10000.00) // Give users $10k starting virtual cash
+  
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
 
-  createdAt DateTime @default(now())
+  // Relations
+  trades        Trade[]
+  channels      Channel[]   // Channels they created/own
+  portfolio     Portfolio[] // Stocks they currently hold
+}
+
+enum UserRole {
+  INVESTOR
+  CREATOR
+  ADMIN
+}
+
+// 2. Channel Table (The Company)
+model Channel {
+  id               String      @id 
+  name             String
+  currentPrice     Float
+  
+  ipoShares        Int         
+  marketCap        Float       
+  
+  creatorScore     Float
+  growthScore      Float
+  engagementScore  Float
+  consistencyScore Float
+  momentumScore    Float
+  
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
+  
+  ownerId          String?  
+  owner            User?       @relation(fields: [ownerId], references: [id])
+  trades           Trade[]
+  shareholders     Portfolio[] 
+}
+
+// 3. Portfolio Table (Tracks current stock ownership)
+model Portfolio {
+  id        String   @id @default(uuid())
+  userId    String
+  channelId String
+  
+  // NEW: How many shares this specific user owns of this specific channel
+  shares    Int      @default(0)
+  
+  user      User     @relation(fields: [userId], references: [id])
+  channel   Channel  @relation(fields: [channelId], references: [id])
+
+  // A user can only have one portfolio entry per channel
+  @@unique([userId, channelId]) 
+}
+
+// 4. Trade Table (Transaction History)
+model Trade {
+  id        String    @id @default(uuid())
+  userId    String
+  channelId String
+  
+  type      TradeType 
+  amount    Int       
+  price     Float     
+  
+  createdAt DateTime  @default(now())
+
+  user      User      @relation(fields: [userId], references: [id])
+  channel   Channel   @relation(fields: [channelId], references: [id])
+}
+
+enum TradeType {
+  BUY
+  SELL
 }
