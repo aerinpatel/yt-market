@@ -1,31 +1,27 @@
-generator client {
-  provider = "prisma-client"
-  output   = "../src/generated/prisma"
-}
-
 datasource db {
   provider = "postgresql"
 }
 
-// 1. User Table (Investors & Creators)
-model User {
-  id            String      @id @default(uuid())
-  email         String      @unique
-  username      String      @unique
-  password      String   
-  salt          String   
-  role          UserRole    @default(INVESTOR)
-  
-  // NEW: The user's available cash to buy stocks, or cash earned from selling
-  walletBalance Float       @default(10000.00) // Give users $10k starting virtual cash
-  
-  createdAt     DateTime    @default(now())
-  updatedAt     DateTime    @updatedAt
+generator client {
+  provider = "prisma-client-js"
+}
 
-  // Relations
-  trades        Trade[]
-  channels      Channel[]   // Channels they created/own
-  portfolio     Portfolio[] // Stocks they currently hold
+model User {
+  id            String   @id @default(uuid())
+  email         String   @unique
+  username      String   @unique
+  password      String // Hashed password
+  salt          String // Bcrypt salt
+  role          UserRole @default(INVESTOR)
+  walletBalance Float    @default(10000.00) // Starting virtual cash
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  trades            Trade[]
+  channels          Channel[] // Channels claimed by this creator
+  portfolios        Portfolio[]
+  watchlistChannels Channel[]   @relation("UserWatchlist")
+  notifications     Notification[]
 }
 
 enum UserRole {
@@ -34,63 +30,100 @@ enum UserRole {
   ADMIN
 }
 
-// 2. Channel Table (The Company)
 model Channel {
-  id               String      @id 
-  name             String
-  currentPrice     Float
-  
-  ipoShares        Int         
-  marketCap        Float       
-  
-  creatorScore     Float
-  growthScore      Float
-  engagementScore  Float
-  consistencyScore Float
-  momentumScore    Float
-  
-  createdAt        DateTime    @default(now())
-  updatedAt        DateTime    @updatedAt
-  
-  ownerId          String?  
-  owner            User?       @relation(fields: [ownerId], references: [id])
-  trades           Trade[]
-  shareholders     Portfolio[] 
+  id           String  @id // YouTube Channel ID
+  name         String
+  handle       String  @unique
+  logo         String?
+  currentPrice Float
+  ipoPrice     Float
+
+  // Algorithm Fundamentals
+  creatorScore      Float
+  growthScore       Float
+  engagementScore   Float
+  consistencyScore  Float
+  momentumScore     Float
+  marketDemandScore Float
+
+  subscriberCount Float
+  viewCount       Float
+  videoCount      Int
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  ownerId      String?
+  owner        User?          @relation(fields: [ownerId], references: [id])
+  trades       Trade[]
+  shareholders Portfolio[]
+  priceHistory PriceHistory[]
+  snapshots    ChannelSnapshot[]
+  watchers     User[]         @relation("UserWatchlist")
+
+  isApproved      Boolean @default(false)
+  isTradingPaused Boolean @default(false)
 }
 
-// 3. Portfolio Table (Tracks current stock ownership)
 model Portfolio {
-  id        String   @id @default(uuid())
-  userId    String
-  channelId String
-  
-  // NEW: How many shares this specific user owns of this specific channel
-  shares    Int      @default(0)
-  
-  user      User     @relation(fields: [userId], references: [id])
-  channel   Channel  @relation(fields: [channelId], references: [id])
+  id              String @id @default(uuid())
+  userId          String
+  channelId       String
+  sharesOwned     Int    @default(0) // Must remain >= 0
+  averageBuyPrice Float  @default(0.0)
 
-  // A user can only have one portfolio entry per channel
-  @@unique([userId, channelId]) 
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  channel Channel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, channelId])
 }
 
-// 4. Trade Table (Transaction History)
 model Trade {
   id        String    @id @default(uuid())
   userId    String
   channelId String
-  
-  type      TradeType 
-  amount    Int       
-  price     Float     
-  
+  type      TradeType
+  shares    Int // Number of shares
+  price     Float // Execution share price
   createdAt DateTime  @default(now())
 
-  user      User      @relation(fields: [userId], references: [id])
-  channel   Channel   @relation(fields: [channelId], references: [id])
+  user    User    @relation(fields: [userId], references: [id])
+  channel Channel @relation(fields: [channelId], references: [id])
 }
 
 enum TradeType {
   BUY
   SELL
+}
+
+model PriceHistory {
+  id           Int      @id @default(autoincrement())
+  channelId    String
+  price        Float
+  creatorScore Float
+  createdAt    DateTime @default(now())
+
+  channel Channel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+}
+
+model ChannelSnapshot {
+  id              Int      @id @default(autoincrement())
+  channelId       String
+  subscriberCount Float
+  viewCount       Float
+  creatorScore    Float
+  stockPrice      Float
+  createdAt       DateTime @default(now())
+
+  channel Channel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+}
+
+model Notification {
+  id        String   @id @default(uuid())
+  userId    String
+  message   String
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
