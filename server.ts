@@ -9,7 +9,7 @@ import { OrderSide, OrderType, Order as EngineOrder } from './lib/engine/types';
 
 const prisma = new PrismaClient();
 const dev = process.env.NODE_ENV !== 'production';
-const hostname = 'localhost';
+const hostname = process.env.HOSTNAME || '0.0.0.0';
 const port = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 
 // Initialize Next.js app instance
@@ -94,6 +94,16 @@ app.prepare().then(async () => {
       console.log(`Socket ${socket.id} joined private room for user ${userId}`);
     });
 
+    // Allow clients to subscribe to global market ticker feed (/market overview)
+    socket.on('subscribe_market', () => {
+      socket.join('global:tape');
+      console.log(`Socket ${socket.id} joined global:tape`);
+    });
+
+    socket.on('unsubscribe_market', () => {
+      socket.leave('global:tape');
+    });
+
     socket.on('unsubscribe', (creatorId: string) => {
       socket.leave(`book:${creatorId}`);
       socket.leave(`trades:${creatorId}`);
@@ -104,9 +114,37 @@ app.prepare().then(async () => {
     });
   });
 
+  // Creator channel name cache for low-overhead global broadcasts
+  const channelNameCache = new Map<string, string>();
+
   // Listen to Matching Engine internal events and broadcast to Socket.IO rooms
-  matchingEngine.on('trade', (trade) => {
+  matchingEngine.on('trade', async (trade) => {
+    // 1. Channel-specific room for the trading terminal
     io.to(`trades:${trade.creatorId}`).emit('trade', trade);
+
+    // 2. Global market tape room for the /market overview page
+    let channelName = channelNameCache.get(trade.creatorId);
+    if (!channelName) {
+      try {
+        const c = await prisma.creator.findUnique({
+          where: { id: trade.creatorId },
+          select: { channelName: true }
+        });
+        channelName = c?.channelName || 'Creator';
+        channelNameCache.set(trade.creatorId, channelName);
+      } catch (err) {
+        channelName = 'Creator';
+      }
+    }
+
+    io.to('global:tape').emit('global_trade', {
+      id: trade.id,
+      creatorId: trade.creatorId,
+      channelName,
+      price: trade.price,
+      quantity: trade.quantity,
+      executedAt: trade.executedAt,
+    });
   });
 
   matchingEngine.on('depth', ({ creatorId, snapshot }) => {

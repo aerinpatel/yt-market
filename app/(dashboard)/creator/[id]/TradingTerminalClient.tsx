@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState, useMemo, useRef } from 'react';
 import { io, Socket } from 'socket.io-client';
 import { useAuth } from '@/lib/contexts/AuthContext';
 import { 
@@ -44,6 +44,7 @@ interface CreatorProps {
   totalShares: string;
   floatShares: string;
   ownerShares: string;
+  listedAt?: string;
   scores?: CreatorScore[];
 }
 
@@ -303,12 +304,33 @@ export default function TradingTerminalClient({
 
             {activeTab === 'chart' && (
               <div className="flex items-center gap-3">
+                {/* Chart Style Toggle */}
+                <div className="flex items-center gap-1 bg-white/[0.03] p-0.5 rounded-lg border border-white/[0.06]">
+                  <button
+                    onClick={() => setChartMode('area')}
+                    className={`px-2 py-0.5 text-[10px] font-mono rounded transition-colors ${
+                      chartMode === 'area' ? 'bg-white/[0.1] text-white' : 'text-zinc-500 hover:text-zinc-300'
+                    }`}
+                  >
+                    Line
+                  </button>
+                  <button
+                    onClick={() => setChartMode('candles')}
+                    className={`px-2 py-0.5 text-[10px] font-mono rounded transition-colors ${
+                      chartMode === 'candles' ? 'bg-white/[0.1] text-white' : 'text-zinc-500 hover:text-zinc-300'
+                    }`}
+                  >
+                    Candles
+                  </button>
+                </div>
+
+                {/* Timeframe Selector */}
                 <div className="flex items-center gap-1 bg-white/[0.03] p-0.5 rounded-lg border border-white/[0.06]">
                   {(['1H', '24H', '7D', '1M', 'ALL'] as const).map(tf => (
                     <button
                       key={tf}
                       onClick={() => setTimeframe(tf)}
-                      className={`px-2 py-0.5 text-[10px] font-mono rounded ${
+                      className={`px-2 py-0.5 text-[10px] font-mono rounded transition-colors ${
                         timeframe === tf ? 'bg-white/[0.1] text-white' : 'text-zinc-500 hover:text-zinc-300'
                       }`}
                     >
@@ -328,7 +350,9 @@ export default function TradingTerminalClient({
                   {/* Chart Header Meta */}
                   <div className="flex items-center justify-between mb-4 z-10">
                     <div>
-                      <span className="text-[10px] font-mono text-zinc-500">REALTIME EXECUTION CURVE</span>
+                      <span className="text-[10px] font-mono text-zinc-500 uppercase tracking-wider">
+                        Realtime Execution Curve ({timeframe})
+                      </span>
                       <p className="text-xl font-mono font-bold text-white">${currentPrice.toFixed(2)}</p>
                     </div>
                     <div className="flex items-center gap-2 text-xs font-mono text-emerald-400 bg-emerald-500/10 px-2.5 py-1 rounded-lg border border-emerald-500/20">
@@ -338,8 +362,16 @@ export default function TradingTerminalClient({
                   </div>
 
                   {/* Interactive Chart Canvas */}
-                  <div className="flex-1 relative w-full flex items-center justify-center">
-                    <InteractiveTradingChart currentPrice={currentPrice} ipoPrice={creator.ipoPrice} recentTrades={recentTrades} />
+                  <div className="flex-1 relative w-full flex items-center justify-center min-h-[260px]">
+                    <InteractiveTradingChart 
+                      currentPrice={currentPrice} 
+                      ipoPrice={creator.ipoPrice} 
+                      recentTrades={recentTrades}
+                      timeframe={timeframe}
+                      chartMode={chartMode}
+                      ticker={creator.ticker}
+                      listedAt={creator.listedAt}
+                    />
                   </div>
 
                   {/* Chart Footer Indicator */}
@@ -698,91 +730,433 @@ export default function TradingTerminalClient({
   );
 }
 
-// Minimalist Interactive SVG Area Chart
+// Professional Interactive Trading Chart (Area Curve + Candlesticks + Crosshair)
 function InteractiveTradingChart({ 
   currentPrice, 
   ipoPrice,
-  recentTrades 
+  recentTrades,
+  timeframe = '24H',
+  chartMode = 'area',
+  ticker = 'STOCK',
+  listedAt
 }: { 
   currentPrice: number; 
   ipoPrice: number;
   recentTrades: any[];
+  timeframe: '1H' | '24H' | '7D' | '1M' | 'ALL';
+  chartMode: 'area' | 'candles';
+  ticker?: string;
+  listedAt?: string;
 }) {
-  const [hoverIndex, setHoverIndex] = useState<number | null>(null);
+  const svgRef = useRef<SVGSVGElement>(null);
+  const [hoverData, setHoverData] = useState<{
+    x: number;
+    y: number;
+    price: number;
+    time: number;
+  } | null>(null);
 
-  // Generate responsive mock points based on trades or baseline
-  const priceData = useMemo(() => {
-    if (recentTrades.length >= 5) {
-      return [...recentTrades].reverse().map(t => Number(t.price));
+  // 1. Calculate Timeframe Bounds
+  const { startTime, endTime, durationMs } = useMemo(() => {
+    const now = Date.now();
+    let dur = 24 * 3600 * 1000;
+    if (timeframe === '1H') dur = 3600 * 1000;
+    else if (timeframe === '24H') dur = 24 * 3600 * 1000;
+    else if (timeframe === '7D') dur = 7 * 24 * 3600 * 1000;
+    else if (timeframe === '1M') dur = 30 * 24 * 3600 * 1000;
+    else if (timeframe === 'ALL') {
+      const listingTime = listedAt ? new Date(listedAt).getTime() : 0;
+      const oldestTrade = recentTrades.length > 0 ? Number(recentTrades[recentTrades.length - 1].executedAt) : now;
+      const earliest = listingTime > 0 ? listingTime : oldestTrade;
+      dur = Math.max(24 * 3600 * 1000, now - earliest);
     }
-    // Baseline progression
-    return [
-      ipoPrice * 0.95,
-      ipoPrice * 0.98,
-      ipoPrice,
-      ipoPrice * 1.02,
-      ipoPrice * 1.05,
-      currentPrice * 0.99,
-      currentPrice
-    ];
-  }, [recentTrades, ipoPrice, currentPrice]);
+    return { startTime: now - dur, endTime: now, durationMs: dur };
+  }, [timeframe, listedAt, recentTrades]);
 
-  const min = Math.min(...priceData) * 0.98;
-  const max = Math.max(...priceData) * 1.02;
-  const range = max - min || 1;
+  // 2. Filter & Chronologically Sort Trades in Timeframe Window
+  const tradesInWindow = useMemo(() => {
+    return recentTrades
+      .filter((t) => Number(t.executedAt) >= startTime)
+      .sort((a, b) => Number(a.executedAt) - Number(b.executedAt));
+  }, [recentTrades, startTime]);
 
-  const width = 600;
-  const height = 240;
+  // 3. Build Genuine Price Series (No fake zig-zags!)
+  const { series, minPrice, maxPrice, isUp } = useMemo(() => {
+    const fallbackPrice = ipoPrice > 0 ? ipoPrice : (currentPrice > 0 ? currentPrice : 1.0);
 
-  const points = priceData.map((val, idx) => {
-    const x = (idx / (priceData.length - 1)) * width;
-    const y = height - ((val - min) / range) * height;
-    return `${x},${y}`;
-  }).join(' ');
+    let pts: Array<{ time: number; price: number }> = [];
 
-  const areaPoints = `0,${height} ${points} ${width},${height}`;
+    if (tradesInWindow.length === 0) {
+      // Clean flat baseline if 0 trades have occurred (honest real-time display)
+      pts = [
+        { time: startTime, price: fallbackPrice },
+        { time: startTime + durationMs * 0.25, price: fallbackPrice },
+        { time: startTime + durationMs * 0.50, price: fallbackPrice },
+        { time: startTime + durationMs * 0.75, price: fallbackPrice },
+        { time: endTime, price: currentPrice > 0 ? currentPrice : fallbackPrice }
+      ];
+    } else {
+      // Historical real-time execution curve
+      pts = [
+        { time: startTime, price: fallbackPrice },
+        ...tradesInWindow.map((t) => ({ time: Number(t.executedAt), price: Number(t.price) })),
+        { time: endTime, price: currentPrice }
+      ];
+    }
+
+    const prices = pts.map((p) => p.price);
+    const rawMin = Math.min(...prices);
+    const rawMax = Math.max(...prices);
+    const range = rawMax - rawMin;
+
+    // Headroom padding so lines never smash into the top/bottom borders
+    const delta = Math.max(0.40, range * 0.18 || rawMax * 0.08);
+    const min = Math.max(0.01, Number((rawMin - delta).toFixed(2)));
+    const max = Number((rawMax + delta).toFixed(2));
+
+    const firstPrice = pts[0]?.price || fallbackPrice;
+    const isBullish = currentPrice >= firstPrice;
+
+    return { series: pts, minPrice: min, maxPrice: max, isUp: isBullish };
+  }, [tradesInWindow, startTime, endTime, durationMs, ipoPrice, currentPrice]);
+
+  // 4. SVG Layout & Coordinate Mapping
+  const width = 800;
+  const height = 280;
+  const padLeft = 14;
+  const padRight = 72; // Width reserved for Y-axis price labels
+  const padTop = 22;
+  const padBottom = 30; // Height reserved for X-axis time labels
+
+  const plotW = width - padLeft - padRight;
+  const plotH = height - padTop - padBottom;
+
+  const getX = (t: number) => padLeft + Math.min(plotW, Math.max(0, ((t - startTime) / durationMs) * plotW));
+  const getY = (p: number) => padTop + plotH - Math.min(plotH, Math.max(0, ((p - minPrice) / (maxPrice - minPrice || 1)) * plotH));
+
+  // Area & Line Path Strings
+  const linePoints = series.map((s) => `${getX(s.time).toFixed(1)},${getY(s.price).toFixed(1)}`).join(' ');
+  const areaPoints = `${padLeft.toFixed(1)},${(padTop + plotH).toFixed(1)} ${linePoints} ${(padLeft + plotW).toFixed(1)},${(padTop + plotH).toFixed(1)}`;
+
+  const mainColor = isUp ? '#10b981' : '#f43f5e';
+  const gradientId = `chartGrad_${ticker}`;
+
+  // Y-Axis Price Levels (5 Horizontal Grid Levels)
+  const yLevels = [0, 0.25, 0.5, 0.75, 1].map((pct) => {
+    const priceVal = minPrice + (maxPrice - minPrice) * (1 - pct);
+    const y = padTop + pct * plotH;
+    return { priceVal, y };
+  });
+
+  // X-Axis Timestamp Levels (5 Time Markers)
+  const xLevels = [0, 0.25, 0.5, 0.75, 1].map((pct) => {
+    const timeVal = startTime + pct * durationMs;
+    const x = padLeft + pct * plotW;
+    let label = '';
+    const d = new Date(timeVal);
+    if (timeframe === '1H') {
+      label = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    } else if (timeframe === '24H') {
+      label = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    } else {
+      label = d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+    }
+    return { label, x };
+  });
+
+  // Candlestick Aggregation (for 'candles' mode)
+  const candles = useMemo(() => {
+    if (chartMode !== 'candles') return [];
+    const numBuckets = 24;
+    const bucketDur = durationMs / numBuckets;
+    const candleList = [];
+    let lastClose = ipoPrice > 0 ? ipoPrice : currentPrice;
+
+    for (let i = 0; i < numBuckets; i++) {
+      const bStart = startTime + i * bucketDur;
+      const bEnd = bStart + bucketDur;
+      const bTrades = tradesInWindow.filter((t) => Number(t.executedAt) >= bStart && Number(t.executedAt) < bEnd);
+
+      let o = lastClose;
+      let c = lastClose;
+      let h = lastClose;
+      let l = lastClose;
+
+      if (bTrades.length > 0) {
+        o = Number(bTrades[0].price);
+        c = Number(bTrades[bTrades.length - 1].price);
+        h = Math.max(...bTrades.map((t) => Number(t.price)));
+        l = Math.min(...bTrades.map((t) => Number(t.price)));
+        lastClose = c;
+      }
+
+      candleList.push({
+        x: padLeft + (i + 0.5) * (plotW / numBuckets),
+        width: Math.max(3, (plotW / numBuckets) * 0.65),
+        open: o,
+        close: c,
+        high: h,
+        low: l,
+        isBull: c >= o,
+      });
+    }
+    return candleList;
+  }, [chartMode, durationMs, startTime, plotW, padLeft, tradesInWindow, ipoPrice, currentPrice]);
+
+  // Mouse Crosshair Tracking
+  const handleMouseMove = (e: React.MouseEvent<SVGSVGElement>) => {
+    const svg = svgRef.current;
+    if (!svg) return;
+    const rect = svg.getBoundingClientRect();
+    const mousePixelX = e.clientX - rect.left;
+    const scaleX = width / rect.width;
+    const svgX = mousePixelX * scaleX;
+
+    if (svgX < padLeft || svgX > padLeft + plotW) {
+      setHoverData(null);
+      return;
+    }
+
+    const mouseTime = startTime + ((svgX - padLeft) / plotW) * durationMs;
+
+    // Find nearest series point
+    let closest = series[0];
+    let closestDiff = Math.abs(series[0].time - mouseTime);
+    for (let i = 1; i < series.length; i++) {
+      const diff = Math.abs(series[i].time - mouseTime);
+      if (diff < closestDiff) {
+        closest = series[i];
+        closestDiff = diff;
+      }
+    }
+
+    setHoverData({
+      x: svgX,
+      y: getY(closest.price),
+      price: closest.price,
+      time: closest.time,
+    });
+  };
+
+  const handleMouseLeave = () => {
+    setHoverData(null);
+  };
+
+  const currentY = getY(currentPrice);
 
   return (
     <div className="w-full h-full flex flex-col justify-center relative select-none">
-      <svg 
-        className="w-full h-56 overflow-visible" 
-        viewBox={`0 0 ${width} ${height}`} 
+      <svg
+        ref={svgRef}
+        className="w-full h-[260px] overflow-visible cursor-crosshair"
+        viewBox={`0 0 ${width} ${height}`}
         preserveAspectRatio="none"
+        onMouseMove={handleMouseMove}
+        onMouseLeave={handleMouseLeave}
       >
         <defs>
-          <linearGradient id="chartGradient" x1="0%" y1="0%" x2="0%" y2="100%">
-            <stop offset="0%" stopColor="#10b981" stopOpacity="0.25" />
-            <stop offset="100%" stopColor="#10b981" stopOpacity="0.0" />
+          <linearGradient id={gradientId} x1="0%" y1="0%" x2="0%" y2="100%">
+            <stop offset="0%" stopColor={mainColor} stopOpacity="0.22" />
+            <stop offset="100%" stopColor={mainColor} stopOpacity="0.0" />
           </linearGradient>
         </defs>
 
-        {/* Grid Lines */}
-        <line x1="0" y1={height * 0.25} x2={width} y2={height * 0.25} stroke="rgba(255,255,255,0.04)" strokeDasharray="4 4" />
-        <line x1="0" y1={height * 0.5} x2={width} y2={height * 0.5} stroke="rgba(255,255,255,0.04)" strokeDasharray="4 4" />
-        <line x1="0" y1={height * 0.75} x2={width} y2={height * 0.75} stroke="rgba(255,255,255,0.04)" strokeDasharray="4 4" />
+        {/* 1. Horizontal Grid Lines & Right Y-Axis Price Labels */}
+        {yLevels.map((lvl, idx) => (
+          <g key={idx}>
+            <line
+              x1={padLeft}
+              y1={lvl.y}
+              x2={padLeft + plotW}
+              y2={lvl.y}
+              stroke="rgba(255,255,255,0.06)"
+              strokeDasharray="4 4"
+            />
+            <text
+              x={padLeft + plotW + 10}
+              y={lvl.y + 3.5}
+              fill="#71717a"
+              fontSize="10"
+              fontFamily="monospace"
+            >
+              ${lvl.priceVal.toFixed(2)}
+            </text>
+          </g>
+        ))}
 
-        {/* Gradient Area Fill */}
-        <polygon points={areaPoints} fill="url(#chartGradient)" />
+        {/* 2. Vertical Grid & Bottom X-Axis Time Labels */}
+        {xLevels.map((lvl, idx) => (
+          <g key={idx}>
+            <line
+              x1={lvl.x}
+              y1={padTop}
+              x2={lvl.x}
+              y2={padTop + plotH}
+              stroke="rgba(255,255,255,0.03)"
+              strokeDasharray="4 4"
+            />
+            <text
+              x={lvl.x}
+              y={padTop + plotH + 20}
+              fill="#71717a"
+              fontSize="9"
+              fontFamily="monospace"
+              textAnchor={idx === 0 ? 'start' : idx === xLevels.length - 1 ? 'end' : 'middle'}
+            >
+              {lvl.label}
+            </text>
+          </g>
+        ))}
 
-        {/* Price Polyline */}
-        <polyline
-          fill="none"
-          stroke="#10b981"
-          strokeWidth="2.5"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          points={points}
+        {/* 3. Real-Time Price Reference Dashed Line */}
+        <line
+          x1={padLeft}
+          y1={currentY}
+          x2={padLeft + plotW}
+          y2={currentY}
+          stroke={mainColor}
+          strokeWidth="1"
+          strokeDasharray="3 3"
+          strokeOpacity="0.5"
         />
 
-        {/* Last Price Glowing Node */}
-        {priceData.length > 0 && (
-          <circle
-            cx={width}
-            cy={height - ((currentPrice - min) / range) * height}
-            r="4"
-            fill="#10b981"
-            className="animate-pulse"
+        {/* 4. Current Price Badge on Right Y-Axis */}
+        <g transform={`translate(${padLeft + plotW + 4}, ${currentY - 9})`}>
+          <rect
+            width="64"
+            height="18"
+            rx="4"
+            fill={mainColor}
+            className="shadow-md"
           />
+          <text
+            x="32"
+            y="12.5"
+            fill={isUp ? '#000000' : '#ffffff'}
+            fontSize="10"
+            fontFamily="monospace"
+            fontWeight="bold"
+            textAnchor="middle"
+          >
+            ${currentPrice.toFixed(2)}
+          </text>
+        </g>
+
+        {/* 5. Chart Visualization (Area or Candlesticks) */}
+        {chartMode === 'area' ? (
+          <>
+            {/* Area Gradient Fill */}
+            <polygon points={areaPoints} fill={`url(#${gradientId})`} />
+
+            {/* Polyline Path */}
+            <polyline
+              fill="none"
+              stroke={mainColor}
+              strokeWidth="2.2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              points={linePoints}
+            />
+
+            {/* Glowing Live Node at Right Edge */}
+            <circle
+              cx={getX(endTime)}
+              cy={currentY}
+              r="4.5"
+              fill={mainColor}
+              className="animate-pulse"
+            />
+          </>
+        ) : (
+          /* Candlestick Visualization */
+          <g>
+            {candles.map((c, idx) => {
+              const candleColor = c.isBull ? '#10b981' : '#f43f5e';
+              const highY = getY(c.high);
+              const lowY = getY(c.low);
+              const openY = getY(c.open);
+              const closeY = getY(c.close);
+              const bodyTop = Math.min(openY, closeY);
+              const bodyHeight = Math.max(2, Math.abs(closeY - openY));
+
+              return (
+                <g key={idx}>
+                  {/* High-Low Wick Line */}
+                  <line
+                    x1={c.x}
+                    y1={highY}
+                    x2={c.x}
+                    y2={lowY}
+                    stroke={candleColor}
+                    strokeWidth="1.2"
+                  />
+                  {/* Candle Body Rect */}
+                  <rect
+                    x={c.x - c.width / 2}
+                    y={bodyTop}
+                    width={c.width}
+                    height={bodyHeight}
+                    fill={c.isBull ? candleColor : candleColor}
+                    stroke={candleColor}
+                    strokeWidth="1"
+                    rx="1"
+                  />
+                </g>
+              );
+            })}
+          </g>
+        )}
+
+        {/* 6. Interactive Crosshair & Hover Tooltip */}
+        {hoverData && (
+          <g>
+            {/* Vertical Line */}
+            <line
+              x1={hoverData.x}
+              y1={padTop}
+              x2={hoverData.x}
+              y2={padTop + plotH}
+              stroke="rgba(255,255,255,0.4)"
+              strokeDasharray="2 2"
+            />
+            {/* Horizontal Line */}
+            <line
+              x1={padLeft}
+              y1={hoverData.y}
+              x2={padLeft + plotW}
+              y2={hoverData.y}
+              stroke="rgba(255,255,255,0.4)"
+              strokeDasharray="2 2"
+            />
+            {/* Hover Snapped Node */}
+            <circle
+              cx={hoverData.x}
+              cy={hoverData.y}
+              r="5"
+              fill={mainColor}
+              stroke="#ffffff"
+              strokeWidth="2"
+            />
+
+            {/* Hover Price Badge on Right Y-Axis */}
+            <g transform={`translate(${padLeft + plotW + 4}, ${hoverData.y - 9})`}>
+              <rect width="64" height="18" rx="4" fill="#27272a" stroke="#52525b" strokeWidth="1" />
+              <text x="32" y="12.5" fill="#f4f4f5" fontSize="10" fontFamily="monospace" textAnchor="middle">
+                ${hoverData.price.toFixed(2)}
+              </text>
+            </g>
+
+            {/* Floating Info Tooltip */}
+            <g transform={`translate(${Math.min(hoverData.x + 10, width - 170)}, ${Math.max(padTop + 10, hoverData.y - 45)})`}>
+              <rect width="150" height="40" rx="8" fill="#18181b" stroke="rgba(255,255,255,0.15)" strokeWidth="1" className="shadow-2xl" />
+              <text x="10" y="17" fill="#ffffff" fontSize="11" fontFamily="monospace" fontWeight="bold">
+                ${hoverData.price.toFixed(2)}
+              </text>
+              <text x="10" y="31" fill="#a1a1aa" fontSize="9" fontFamily="monospace">
+                {new Date(hoverData.time).toLocaleTimeString()}
+              </text>
+            </g>
+          </g>
         )}
       </svg>
     </div>

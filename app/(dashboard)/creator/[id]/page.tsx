@@ -43,6 +43,7 @@ export default async function CreatorTradingPage({ params }: { params: Promise<{
     totalShares: creator.totalShares.toString(),
     floatShares: creator.floatShares.toString(),
     ownerShares: creator.ownerShares.toString(),
+    listedAt: creator.listedAt ? creator.listedAt.toISOString() : creator.createdAt.toISOString(),
     scores: creator.scores.map(s => ({
       id: s.id,
       subscribers: s.subscribers.toString(),
