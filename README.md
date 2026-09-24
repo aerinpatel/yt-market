@@ -44,6 +44,15 @@ The in-memory execution core is backed by a **two-phase dual-escrow ledger in Po
 
 ## 🏛️ System Architecture
 
+<p align="center">
+  <img src="./docs/images/architecture.png" alt="CreatorX (YT Market) System Architecture Diagram" width="100%" />
+</p>
+
+<br />
+
+<details>
+<summary><b>🔍 Click to view interactive Mermaid Source Diagram</b></summary>
+
 ```mermaid
 flowchart TB
     subgraph ClientLayer ["Client Layer (Next.js 16 App Router & React 19)"]
@@ -119,6 +128,7 @@ flowchart TB
     YTService --> ScoreEngine
     ScoreEngine -->|"Initial Valuation"| API_IPO
 ```
+</details>
 
 ---
 
@@ -224,13 +234,19 @@ flowchart TD
 #### B. Post-Trade Double-Entry Reconciliation
 * **Volume-Weighted Average Price (VWAP) Cost Basis**:
   When a buyer acquires shares in multiple tranches, their cost basis updates using:
+
   $$\text{New Avg Buy Price} = \frac{(Q_{\text{prev}} \times P_{\text{prev}}) + (Q_{\text{trade}} \times P_{\text{trade}})}{Q_{\text{prev}} + Q_{\text{trade}}}$$
+
 * **Maker-Taker Pricing & Price Improvement Refund**:
-  Trades always execute at the **Maker's price** (the resting order already in the book). If a buyer places a Limit Buy at **\$20.00** and matches an ask resting at **\$15.00**, the trade settles at \$15.00. The \$5.00/share difference is immediately credited back to the buyer's `walletBalance`:
-  $$\text{Refund Amount} = (\text{Buyer Limit Price} - \text{Execution Price}) \times \text{Quantity}$$
+  Trades always execute at the **Maker's price** (the resting order already in the book). If a buyer places a Limit Buy at **$20.00** and matches an ask resting at **$15.00**, the trade settles at $15.00. The $5.00/share difference is immediately credited back to the buyer's `walletBalance`:
+
+  $$\text{Refund Amount} = (P_{\text{limit}} - P_{\text{executed}}) \times Q_{\text{trade}}$$
+
 * **Immutable Realized PnL Ledger**:
   When shares are liquidated, profit/loss is calculated and written to an immutable `RealizedPnL` record:
-  $$\text{Realized PnL} = (P_{\text{sell}} - P_{\text{cost\_at\_sale}}) \times Q_{\text{sold}}$$
+
+  $$\text{Realized PnL} = (P_{\text{sell}} - P_{\text{cost}}) \times Q_{\text{sold}}$$
+
   *Why a dedicated table?* Because `Holding.avgBuyPrice` changes upon subsequent purchases, calculating past profit on the fly from current holding state corrupts historical tax records. An append-only ledger guarantees historical auditability.
 
 ---
@@ -242,12 +258,14 @@ Channels are tokenized and initially priced based on verified performance metric
 $$\text{Base Score} = (\text{Subs} \times 0.50) + (\text{Total Views} \times 0.01) + (\text{Video Count} \times 50)$$
 
 * **Economic Rationale**:
-  * **\$0.50 / Subscriber**: Reflects lifetime organic subscriber enterprise value.
-  * **\$0.01 / View**: Approximates historical ad inventory yield based on an average \$10 RPM.
-  * **\$50.00 / Video**: Capitalizes evergreen back-catalog video assets.
+  * **$0.50 / Subscriber**: Reflects lifetime organic subscriber enterprise value.
+  * **$0.01 / View**: Approximates historical ad inventory yield based on an average $10 RPM.
+  * **$50.00 / Video**: Capitalizes evergreen back-catalog video assets.
 * **Suggested IPO Pricing**:
-  $$\text{Suggested Valuation} = \max(\$10{,}000, \, \text{Base Score} \times 0.05)$$
-  $$\text{IPO Share Price} = \frac{\text{Suggested Valuation}}{10{,}000 \text{ Standard Float Shares}}$$
+
+  $$\text{Suggested Valuation} = \max(10000, \, \text{Base Score} \times 0.05)$$
+
+  $$\text{IPO Share Price} = \frac{\text{Suggested Valuation}}{10000 \text{ Float Shares}}$$
 
 ---
 
@@ -382,7 +400,7 @@ The table below outlines the exact failure points of the current architecture un
 * **Primary Bottleneck**: **Single Worker Thread & Synchronous Database Write Throughput.**
 * **Root Cause**: A single worker thread processes orders sequentially for all creators. At 10,000 orders/sec, the thread message queue backs up. Simultaneously, synchronous PostgreSQL disk writes (Write-Ahead Logging) cannot keep pace.
 * **Solution**:
-  1. **Shard the Matching Engine by `creatorId`**: Since trading in Creator A is independent of Creator B, partition order books across worker threads using consistent hashing: $\text{Worker ID} = \text{hash}(\text{creatorId}) \pmod N$.
+  1. **Shard the Matching Engine by `creatorId`**: Since trading in Creator A is independent of Creator B, partition order books across worker threads using consistent hashing: `Worker ID = hash(creatorId) % N`.
   2. **Asynchronous Ledger via Apache Kafka**: Decouple order execution from database writes. The matching engine emits matched trades to a Kafka topic (`trades.executed`). Dedicated consumer workers batch-insert records into PostgreSQL in bulk.
 
 ### 4. Level 4: 1,000,000 Concurrent Users (~50,000 – 100,000 TPS)
@@ -392,7 +410,7 @@ The table below outlines the exact failure points of the current architecture un
 
 ### 5. Level 5: 10,000,000 Users (Hyper-Scale / Exchange Scale)
 * **Primary Bottleneck**: **WebSocket Egress Bandwidth (Fan-Out Explosion).**
-* **Root Cause**: 500,000 users watching a viral creator chart means a 100-byte trade tick requires $500{,}000 \times 100\text{ bytes} = \mathbf{50\text{ MB per trade}}$. At 50 trades/sec, network egress hits **2.5 GB/sec**, melting network interfaces.
+* **Root Cause**: 500,000 users watching a viral creator chart means a 100-byte trade tick requires 500,000 × 100 bytes = **50 MB per trade**. At 50 trades/sec, network egress hits **2.5 GB/sec**, melting network interfaces.
 * **Solution**:
   1. **100ms Tick Conflation**: Batch all trade executions and order book modifications occurring in a 100ms window into a single compressed frame, reducing bandwidth by 85–90%.
   2. **Edge Market-Data Gateways**: Terminate WebSockets at the edge using Cloudflare Workers or AWS API Gateway distributed across 200+ global edge locations.
