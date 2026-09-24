@@ -24,24 +24,6 @@ The in-memory execution core is backed by a **two-phase dual-escrow ledger in Po
 
 ---
 
-## 🗺️ Visual Architecture Blueprint (For External Design Tools)
-
-> [!TIP]
-> **Prompt for External Architecture Tools (Eraser.io, Excalidraw, PlantUML, Miro):**
-> 
-> ```text
-> High-level system architecture for CreatorX (a real-time creator equity exchange):
-> 1. Client Layer: Next.js 16 (App Router), React 19 Client components, SVG interactive trading terminal, Order Book L2 ladder, live trade ticker, portfolio management.
-> 2. Network & Telemetry Layer: Custom Node.js HTTP server (server.ts) mounting Socket.IO. Isolated room topology: 'book:creatorId', 'trades:creatorId', 'global:tape', 'user:userId'.
-> 3. Application API Gateway: Next.js App Router route handlers (/api/orders, /api/orders/[id], /api/creators/ipo, /api/portfolio).
-> 4. Matching Engine Core: Isolated Node.js Worker Thread (matchingWorker.ts) communicating via IPC message passing with MatchingEngine.ts. Inside: OrderBook instance per creator, Bids stored in MaxHeap, Asks stored in MinHeap, price levels contain FIFO Linked-List queues, O(1) hash map lookups, O(1) lazy tombstone cancellations.
-> 5. Financial Settlement & Ledger: reconciliation.ts executing atomic double-entry PostgreSQL transactions via Prisma ORM ($transaction). Dual-escrow locks cash/shares pre-trade; post-trade handles price improvement refunds, seller cash payouts, and immutable RealizedPnL writes.
-> 6. Valuation & Valuation Ingestion: scoreEngine.ts pulling metrics directly from YouTube Data API v3 with timeout fallbacks to compute dynamic fundamental channel valuations.
-> 7. Database Layer: PostgreSQL 16 (Docker / Neon Cloud) using Decimal(14,2) for money and BigInt for share volumes.
-> ```
-
----
-
 ## 🏛️ System Architecture
 
 <p align="center">
